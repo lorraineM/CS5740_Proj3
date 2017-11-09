@@ -8,6 +8,11 @@ import json
 import queue
 import random
 
+#external libraries: 
+#StanfordCoreNLP, NLTK, sklearn.feature_extraction.text
+#other libraries: 
+#defaultdict, numpy, json, queue, random
+
 nltk.download('stopwords')
 nltk.download('punkt')
 STOP_WORDS = nltk.corpus.stopwords.words('english')
@@ -16,38 +21,48 @@ QUESTIONTYPE = ['what','who','where','when','how','why','which','other']
 TIMENER = ['DATE','DURATION','TIME']
 NUMERICAL = ['MONEY','NUMBER','ORDINAL','PERCENT']
 MAX_SIZE = 100
-ANSWER_SET = defaultdict(str)
-OUTPUTFILE = 'result1.json'
-INPUTFILE = 'singleparagraph.json'
-#paragraph: qas
-#				q
-#				id
-#				a
-#           context
-#NNS, NNP, NNPS, NN
-#NER: NAME: PERSON, LOCATION, ORGANIZATION, MISC
-#NUMERICAL: MONEY, NUMBER, ORDINAL, PERCENT
-#TEMPORAL: DATE, TIME, DURATION, SET
-#NLP = StanfordCoreNLP('http://localhost:9000')
 
+#ANSWER_SET is a dictionary which stores [questionID,Corresponding Answer]
+#e.g. ["5733be284776f4190066117f": "Venite Ad Me Omnes"]
+ANSWER_SET = defaultdict(str)
+OUTPUTFILE = 'result.json'
+INPUTFILE = 'singleparagraph.json'
+
+#READ JSON File
 file = INPUTFILE
 with open(file, 'r') as f:
 	data = f.read()
 line = json.loads(data)
 
-class span:
+#A CLASS 
+#r
+#e.g. 
+class questionSpan:
+	def __init__(self):
+		self.qtype = 8
+		self.replacedPart = ""
+		self.question = ""
+
+class candidateAnswerSpan:
 	def __init__(self):
 		self.tokens = []
 		self.type = 'O'
 
-#dfs
-def getTokes_fromTree(tree):
+class Span:
+	def __init__(self):
+		self.tokens = []
+
+#Get tokens corresponding to an NP non-terminals from a document parse Tree 
+#e.g. given [NP([NP([DT([The])],[NNS([writings])])],[PP([IN([of])],[NP([NNP(Samuel)],[NNP(Pepys)])])])]
+#e.g. given [NP([NNP(Samuel)],[NNP(Pepys)])]
+#the function will return [Samuel Pepys] as an integration
+def getNP_fromTree(tree):
 	result = ""
 	if len(tree.child) > 0:
 		for child in tree.child:
 			if child.value == "NP":
 				return "", True
-			t, h = getTokes_fromTree(child)
+			t, h = getNP_fromTree(child)
 			if h:
 				return "", True
 			else:
@@ -56,13 +71,16 @@ def getTokes_fromTree(tree):
 		return tree.value, False
 	return result, False
 
+#Get tokens corresponding to an WHNP non-terminals from a document parse Tree 
+#e.g. given child [WHNP([WDT(Which)],[NN(prize)])]
+#the fucntion will return [Which prize] as an integration
 def getWHNP_fromTree(tree):
 	result = ""
 	if len(tree.child) > 0:
 		for child in tree.child:
 			if child.value == "WHNP":
 				return "", True
-			t, h = getTokes_fromTree(child)
+			t, h = getWHNP_fromTree(child)
 			if h:
 				return "", True
 			else:
@@ -71,10 +89,11 @@ def getWHNP_fromTree(tree):
 		return tree.value, False
 	return result, False
 
-#deal with the parse tree
-#e.g. TEST_SENTENCE = "The writings of Samuel Pepys describe the pub as the heart of England."
-#return [['The', 'writings'], ['the', 'pub'], ['Samuel', 'Pepys'], ['the', 'heart'], ['England']]
-def parse_tree(Q):
+#Process the parse tree to get all NP tokens
+#e.g. given a sentence that "The writings of Samuel Pepys describe the pub as the heart of England."
+#the function will return [[The writings], [the pub], [Samuel Pepys], [the heart], [England]] consisting of 5 NP 
+def parse_tree_NP(Q):
+	#BFS: Find all NP subtrees
 	tokens_q = queue.Queue(maxsize=MAX_SIZE)
 	while not Q.empty():
 		tree = Q.get()
@@ -83,16 +102,20 @@ def parse_tree(Q):
 		if len(tree.child) > 0:
 			for child in tree.child:
 				Q.put(child)
-	#get all tokens such as [tk1,tk2,tk3] from tree
+	
+	#Get all conrresponding tokens 
 	tokens_list = []
 	while not tokens_q.empty():
 		tr = tokens_q.get()
-		(r, h) = getTokes_fromTree(tr)
+		(r, h) = getNP_fromTree(tr)
 		if not h:
 			tl = r.split()
 			tokens_list.append(tl)
 	return tokens_list
 
+#Process the parse tree to get all WHNP tokens
+#e.g. given a sentence that "Which prize did Frederick Buechner create?"
+#the function will return [Which prize] which is a single WHNP
 def parse_tree_WHNP(Q):
 	tokens_q = queue.Queue(maxsize=MAX_SIZE)
 	while not Q.empty():
@@ -112,12 +135,14 @@ def parse_tree_WHNP(Q):
 			tokens_list.append(tl)
 	return tokens_list
 
-#l1: [['The', 'writings'], ['the', 'pub'], ['Samuel', 'Pepys'], ['the', 'heart'], ['England']]
-#l2: token1, token2,……, tokenn
-def generateSpans(l1, l2):
+#Generate a candidate answer consists of answer type and answer tokens
+#e.g. ["Samuel", "Pepys"] PERSON
+#e.g. ["the", "pub"] O
+def generate_candidateAnswerSpans(l1, l2):
+	count = defaultdict(int)
 	span_list = []
 	for s in l1:
-		sp = span()
+		sp = candidateAnswerSpan()
 		for word in s:
 			sp.tokens.append(word)
 			for wordl2 in l2:
@@ -130,71 +155,67 @@ def generateSpans(l1, l2):
 		span_list.append(sp)
 	return span_list
 
-def find_which(which_sentence, replacedSpan, client):
-	c = client.annotate(which_sentence)
-	which_parse_tree = c.sentence[0].parseTree
-	Q = queue.Queue(maxsize=MAX_SIZE)
-	Q.put(which_parse_tree)
-	tokens_list = parse_tree(Q)
-	spanList = generateSpans(tokens_list, c.sentence[0].token)
-	index = 0
-	for j in range(len(spanList)):
-		ts = " ".join(spanList[j].tokens)
-		if 'which' in ts:
-			index = j
-			break;
-	if spanList:
-		a = spanList[index].tokens
-		a1 = " ".join(a)
-		b = replacedSpan.tokens
-		b1 = " ".join(b)
-		try:
-			which_sentence = which_sentence.replace(a1, b1)
-		except Exception as e:
-			pass
-	else:
-		b = replacedSpan.tokens
-		b1 = " ".join(b)
-		what_sentence = what_sentence.replace('which', b1)
-	return which_sentence
+def generate_Spans(l1, l2):
+	count = defaultdict(int)
+	span_list = []
+	for s in l1:
+		sp = Span()
+		for word in s:
+			sp.tokens.append(word)
+			for wordl2 in l2:
+				w = wordl2.word
+				if word == w:
+					break;
+		span_list.append(sp)
+	return span_list
 
-def find_whichType_what(what_sentence, replacedSpan, client):
-	c = client.annotate(what_sentence)
-	what_parse_tree = c.sentence[0].parseTree
+#Since when we attempt to select a best answer from candidates 
+#we will replace tokens in WH- or How with each candidates to get similarity score using tf-idf,
+#we need to find a valid part to replace.
+#e.g. Question: "Which prize did Frederick Buechner create?"
+#The function will return "Which prize".
+#Then we will replace "which prize " with each candidates, then we get a new sentence "Buechner Prize for Preaching did Frederick Buechner create"
+def generateReplacedPart(parsedQuestion, qtype):
+	rp = ""
 	Q = queue.Queue(maxsize=MAX_SIZE)
-	Q.put(what_parse_tree)
+	parseT = parsedQuestion.parseTree
+	Q.put(parseT)
 	tokens_list = parse_tree_WHNP(Q)
-	spanList = generateSpans(tokens_list, c.sentence[0].token)
-	index = 0
-	for j in range(len(spanList)):
-		ts = " ".join(spanList[j].tokens)
-		if 'what' in ts:
-			index = j
-			break;
+	spanList = generate_Spans(tokens_list, parsedQuestion.token)
+	#WHICH
+	if qtype == 6:
+		rp = "which"
+		index = 0
+		for j in range(len(spanList)):
+			ts = " ".join(spanList[j].tokens)
+			if 'which' in ts:
+				index = j
+				break;
+		if spanList:
+			a = spanList[index].tokens
+			rp = " ".join(a)
+		else:
+			rp = "which"
+	#WDT WHAT
+	elif qtype == 7:
+		rp = "what"
+		index = 0
+		for j in range(len(spanList)):
+			ts = " ".join(spanList[j].tokens)
+			if 'what' in ts:
+				index = j
+				break;
+		if spanList:
+			a = spanList[index].tokens
+			rp = " ".join(a)
+		else:
+			rp = "what"	
+	return rp
 
-	if spanList:
-		a = spanList[index].tokens
-		a1 = " ".join(a)
-		b = replacedSpan.tokens
-		b1 = " ".join(b)
-		try:
-			what_sentence = what_sentence.replace(a1, b1)
-		except Exception as e:
-			pass
-	else:
-		b = replacedSpan.tokens
-		b1 = " ".join(b)
-		what_sentence = what_sentence.replace('what', b1)
-	return what_sentence
 
-'''
-#['Which', 'country', "'s", 'courts']O
-#['the', 'ECHR']ORGANIZATION
-#['a', 'wider', 'stance']O
-#['provisions']O
-#['genocide', 'laws']O
+# just a test part
 def testPart():
-	TEST_SENTENCE = "what religious activity be responsible for the grow demand for hostelry"
+	TEST_SENTENCE = "Which prize did Frederick Buechner create?"
 	with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.split()) as testclient:
 		c = testclient.annotate(TEST_SENTENCE)
 		TEST_PARSE_TREE = c.sentence[0].parseTree
@@ -204,17 +225,22 @@ def testPart():
 	tokens_list = parse_tree_WHNP(TEST_Q)
 	print (tokens_list)
 
-	spanList = generateSpans(tokens_list, c.sentence[0].token)
+	spanList = generate_candidateAnswerSpans(tokens_list, c.sentence[0].token)
 	sizeList = len(spanList)
 	for s in spanList:
 		print (str(s.tokens) + str(s.type))
 	return 0
-testPart()
-'''
-def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client):
+#testPart()
+
+#Select the best answer from candidate answer list
+def getBestAnswer(spanList, QSpan, context, model):
 	score = []
 	indexArray = []
 	resultIndex = 0
+
+	questionType = QSpan.qtype
+	parsedQuestion = QSpan.question
+	#replacedPart = QSpan.replacedPart
 
 	#WHO : PERSON NER
 	if questionType == 1:
@@ -235,6 +261,7 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 		else:
 			resultIndex = random.randint(0, len(spanList) - 1)
 
+	#WHERE: LOCATION OR ORGANIZATION NER
 	elif questionType == 2:
 		for j in range(len(spanList)):
 			s = spanList[j]
@@ -253,6 +280,7 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 		else:
 			resultIndex = random.randint(0, len(spanList) - 1)
 
+	#WHEN: TIMENER
 	elif questionType == 3:
 		for j in range(len(spanList)):
 			s = spanList[j]
@@ -272,12 +300,13 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 		else:
 			resultIndex = random.randint(0, len(spanList) - 1)
 
+	#WHICH
 	elif questionType == 6:
 		for j in range(len(spanList)):
 			s = spanList[j]
 			tokens = s.tokens
 			spanType = s.type
-			strReplaced = find_which(parsedQuestion, s, client)
+			strReplaced = parsedQuestion.replace(QSpan.replacedPart, " ".join(tokens))
 			x = model.fit_transform([context, strReplaced])
 			matrix = (x * x.T).A
 			score.append(matrix[0][1])
@@ -294,7 +323,7 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 			s = spanList[j]
 			tokens = s.tokens
 			spanType = s.type
-			strReplaced = find_whichType_what(parsedQuestion, s, client)
+			strReplaced = parsedQuestion.replace(QSpan.replacedPart, " ".join(tokens))
 			x = model.fit_transform([context, strReplaced])
 			matrix = (x * x.T).A
 			score.append(matrix[0][1])
@@ -306,6 +335,7 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 		else:
 			resultIndex = random.randint(0, len(spanList) - 1)
 
+	#HOW
 	elif questionType == 4:
 		#how many OR how much
 		if "how many" in parsedQuestion:
@@ -374,6 +404,8 @@ def getBestAnswer(spanList, parsedQuestion, context, model, questionType, client
 			resultIndex = indexArray[i]
 		else:
 			resultIndex = random.randint(0, len(spanList) - 1)
+
+	#WHAT
 	elif questionType == 0:
 		for j in range(len(spanList)):
 			s = spanList[j]
@@ -430,12 +462,12 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 				#state 1: temp_question.sentence[0].token
 				#state 2: np.array(this_question)
 				temp_question = client.annotate(raw_question)
-				parsed_question = []
 				this_question = []
 				size_tokens = len(temp_question.sentence[0].token)
 				list_tokens = temp_question.sentence[0].token
 				IDENTFY = False
 				qtype = 8
+				QSpan = questionSpan()
 				for index in range(size_tokens):
 					qs = list_tokens[index].lemma.lower()
 					if qs not in PUNCTUATIONS:
@@ -450,6 +482,7 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 								elif qtype_pos == 'WDT':
 									#which what
 									qtype = 7
+									QSpan.replacedPart = generateReplacedPart(temp_question.sentence[0], qtype)
 								else:
 									IDENTFY = False
 							elif qs == 'who':
@@ -470,14 +503,19 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 							elif qs == 'which':
 								IDENTFY = True
 								qtype = 6
-				parsed_question_str = " ".join(this_question)
-				parsed_question.append(parsed_question_str)
+								QSpan.replacedPart = generateReplacedPart(temp_question.sentence[0], qtype)
+				parsed_question = " ".join(this_question)
+
+
+				QSpan.qtype = qtype				
+				QSpan.question = parsed_question
+
 
 				#get the TFIDF of the question
 				find_max_smilarity = []
 				for j in range(len(parsed_context)):
 					a_c = parsed_context[j]
-					a_q = parsed_question_str
+					a_q = parsed_question
 					combine = [a_c, a_q]
 					matrix = unigram_model.fit_transform(combine)
 					scoreA = (matrix * matrix.T).A
@@ -491,34 +529,23 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 				tree = candidate_sentence.parseTree
 				Q = queue.Queue(maxsize=MAX_SIZE)
 				Q.put(tree)
-				canditate_answers = parse_tree(Q)
+				canditate_answers = parse_tree_NP(Q)
 
 				#generate candidate spans
 				#e.g.['The', 'writings']O,['the', 'pub']O,['Samuel', 'Pepys']PERSON,['the', 'heart']O,['England']LOCATION
-				spanList = generateSpans(canditate_answers, candidate_sentence.token)
+				spanList = generate_candidateAnswerSpans(canditate_answers, candidate_sentence.token)
 				sizeList = len(spanList)
 
-				#parsed_sentence
-				#y_context[max_index_sentence]
-				#unigram_model
-				#type
-				#size_vocabulary
-				resultIndex = getBestAnswer(spanList, parsed_question_str, parsed_context[max_index_sentence], unigram_model, qtype, client)
-				#who
-				#find PERSON NER
+				resultIndex = getBestAnswer(spanList, QSpan, parsed_context[max_index_sentence], unigram_model)
 				answerString = ""
 				s = spanList[resultIndex]
+
 				for j in range(len(s.tokens) - 1):
 					answerString += s.tokens[j] + " "
 				answerString += s.tokens[len(s.tokens) - 1]
 				ANSWER_SET[qid] = answerString
 
-
 result_json = json.dumps(ANSWER_SET)
 with open(OUTPUTFILE, 'w') as fout:
 	fout.writelines(result_json)			
-
-
-
-
 
