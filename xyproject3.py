@@ -34,15 +34,14 @@ with open(file, 'r') as f:
 	data = f.read()
 line = json.loads(data)
 
-#A CLASS 
-#r
-#e.g. 
+#a class for each question, recording its type, question content and part for substitution
 class questionSpan:
 	def __init__(self):
 		self.qtype = 8
 		self.replacedPart = ""
 		self.question = ""
 
+#a class for each candidate answer, recording its tokens and type
 class candidateAnswerSpan:
 	def __init__(self):
 		self.tokens = []
@@ -233,6 +232,10 @@ def testPart():
 #testPart()
 
 #Select the best answer from candidate answer list
+#According to different question types, we will generate corresponding sublists of the original candidate answer lists
+#e.g. for WHO question, we will add all spans whose NER is PERSON to the sublist.
+#Then for each span in the sublist, substitute the conrresponding interrogative pronoun with them, thus generating a new sentence.
+#Finally we calculate TF-IDF scores separately for each new sentence, and we will select the final answer which is of the hightest score.
 def getBestAnswer(spanList, QSpan, context, model):
 	score = []
 	indexArray = []
@@ -240,7 +243,6 @@ def getBestAnswer(spanList, QSpan, context, model):
 
 	questionType = QSpan.qtype
 	parsedQuestion = QSpan.question
-	#replacedPart = QSpan.replacedPart
 
 	#WHO : PERSON NER
 	if questionType == 1:
@@ -250,11 +252,13 @@ def getBestAnswer(spanList, QSpan, context, model):
 			spanType = s.type
 			if spanType == 'PERSON':
 				strReplaced = parsedQuestion.replace('who', " ".join(tokens))
+				#calculate tf-idf
 				x = model.fit_transform([context, strReplaced])
 				matrix = (x * x.T).A
 				score.append(matrix[0][1])
 				indexArray.append(j)
 		scoreArray = np.array(score)
+		#select one of the highest score
 		if len(scoreArray) > 0:
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
@@ -427,7 +431,8 @@ def getBestAnswer(spanList, QSpan, context, model):
 	return resultIndex
 
 
-#use corenlp to tokenize ssplit lemma pos ner
+#Use stanford corenlp to tokenize given documents including contexts and questions, then split tokens into sentences.
+#Obtain corresponding parse tree, lemma, POS, NER.
 with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.split()) as client:
 	for p in line['data']:
 		new_para = defaultdict(list)
@@ -436,8 +441,8 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 			raw_context = section['context']
 			set_qass = section['qas']
 
-			#parse context
-			#get lemmas of words, remove punctuations
+			#process context
+			#filter out punctuations 
 			temp_context = client.annotate(raw_context)
 			parsed_context = []
 			for s in temp_context.sentence:
@@ -449,18 +454,16 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 				parsed_sentence = " ".join(this_sentence)
 				parsed_context.append(parsed_sentence)
 
-			#train TFIDF model using context content 
+			#train TFIDF model using processed context content without stopwords
 			unigram_model = TFIDF(input=parsed_context, analyzer='word', dtype=np.float32, stop_words=STOP_WORDS)			
-			#deal with questions
+			#process each question in the question & answers set
 			for q in set_qass:
 				raw_question = q['question']
 				qid = q['id']
 				
-				#parse question
-				#get lemmas of words remove punctuations
-				#get the question type
-				#state 1: temp_question.sentence[0].token
-				#state 2: np.array(this_question)
+				#process a single question, generating a corresponding questionSpan
+				#additionally, analize the type of the question
+				#if the question type is WDT WHAT or WHICH, we should get the part for substitution
 				temp_question = client.annotate(raw_question)
 				this_question = []
 				size_tokens = len(temp_question.sentence[0].token)
@@ -505,13 +508,13 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 								qtype = 6
 								QSpan.replacedPart = generateReplacedPart(temp_question.sentence[0], qtype)
 				parsed_question = " ".join(this_question)
-
-
 				QSpan.qtype = qtype				
 				QSpan.question = parsed_question
 
 
-				#get the TFIDF of the question
+				#calculate the TFIDF of the question using unigram model trained as above
+				#we use this to evaluate the similarity between given question and each sentence of context
+				#max_index_sentence records the index of sentence which has best smilarity performance
 				find_max_smilarity = []
 				for j in range(len(parsed_context)):
 					a_c = parsed_context[j]
@@ -523,28 +526,32 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 				find_max_smilarity = np.array(find_max_smilarity)
 				max_index_sentence = np.argmax(find_max_smilarity)
 
-				#HAVE found the sentence containing the answer
+				#HAVE found the sentence containing candidate answers
 				#index : max_index_sentence
+				#use function parse_tree_NP() to find all NPs in this sentence
 				candidate_sentence = temp_context.sentence[max_index_sentence]
 				tree = candidate_sentence.parseTree
 				Q = queue.Queue(maxsize=MAX_SIZE)
 				Q.put(tree)
 				canditate_answers = parse_tree_NP(Q)
 
-				#generate candidate spans
+				#generate candidate answer spans with their corresponding types
 				#e.g.['The', 'writings']O,['the', 'pub']O,['Samuel', 'Pepys']PERSON,['the', 'heart']O,['England']LOCATION
 				spanList = generate_candidateAnswerSpans(canditate_answers, candidate_sentence.token)
 				sizeList = len(spanList)
 
+				#use function getBestAnswer() to find the best answer from candidate answer list
 				resultIndex = getBestAnswer(spanList, QSpan, parsed_context[max_index_sentence], unigram_model)
 				answerString = ""
 				s = spanList[resultIndex]
 
+				#generate the final answer string based on the best answer span generated above
 				for j in range(len(s.tokens) - 1):
 					answerString += s.tokens[j] + " "
 				answerString += s.tokens[len(s.tokens) - 1]
 				ANSWER_SET[qid] = answerString
 
+#generate a JSON file consisting of results
 result_json = json.dumps(ANSWER_SET)
 with open(OUTPUTFILE, 'w') as fout:
 	fout.writelines(result_json)			
