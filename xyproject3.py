@@ -25,8 +25,8 @@ MAX_SIZE = 100
 #ANSWER_SET is a dictionary which stores [questionID,Corresponding Answer]
 #e.g. ["5733be284776f4190066117f": "Venite Ad Me Omnes"]
 ANSWER_SET = defaultdict(str)
-OUTPUTFILE = 'result.json'
-INPUTFILE = 'singleparagraph.json'
+OUTPUTFILE = 'r.json'
+INPUTFILE = '110.json'
 
 #READ JSON File
 file = INPUTFILE
@@ -263,7 +263,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	#WHERE: LOCATION OR ORGANIZATION NER
 	elif questionType == 2:
@@ -282,7 +285,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	#WHEN: TIMENER
 	elif questionType == 3:
@@ -302,7 +308,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	#WHICH
 	elif questionType == 6:
@@ -320,7 +329,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	elif questionType == 7:
 		for j in range(len(spanList)):
@@ -337,7 +349,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	#HOW
 	elif questionType == 4:
@@ -407,7 +422,10 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 
 	#WHAT
 	elif questionType == 0:
@@ -425,9 +443,15 @@ def getBestAnswer(spanList, QSpan, context, model):
 			i = np.argmax(scoreArray)
 			resultIndex = indexArray[i]
 		else:
-			resultIndex = random.randint(0, len(spanList) - 1)
+			try:
+				resultIndex = random.randint(0, len(spanList) - 1)
+			except Exception as e:
+				pass
 	else:
-		resultIndex = random.randint(0, len(spanList) - 1)
+		try:
+			resultIndex = random.randint(0, len(spanList) - 1)
+		except Exception as e:
+			pass
 	return resultIndex
 
 
@@ -540,15 +564,16 @@ with corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.spli
 				spanList = generate_candidateAnswerSpans(canditate_answers, candidate_sentence.token)
 				sizeList = len(spanList)
 
-				#use function getBestAnswer() to find the best answer from candidate answer list
-				resultIndex = getBestAnswer(spanList, QSpan, parsed_context[max_index_sentence], unigram_model)
 				answerString = ""
-				s = spanList[resultIndex]
+				if len(spanList) > 0:
+					#use function getBestAnswer() to find the best answer from candidate answer list
+					resultIndex = getBestAnswer(spanList, QSpan, parsed_context[max_index_sentence], unigram_model)
+					s = spanList[resultIndex]
 
-				#generate the final answer string based on the best answer span generated above
-				for j in range(len(s.tokens) - 1):
-					answerString += s.tokens[j] + " "
-				answerString += s.tokens[len(s.tokens) - 1]
+					#generate the final answer string based on the best answer span generated above
+					for j in range(len(s.tokens) - 1):
+						answerString += s.tokens[j] + " "
+					answerString += s.tokens[len(s.tokens) - 1]
 				ANSWER_SET[qid] = answerString
 
 #generate a JSON file consisting of results
