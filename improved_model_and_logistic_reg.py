@@ -461,7 +461,7 @@ def getPosNerList(sentence):
 
 ### get the fraction of each ner in a sentence
 def getNerFracVector(annotateList):
-    nerType = {'PERSON': 0, 'LOCATION': 1, 'ORGANIZATION': 2, 'DATE': 3, 'TIME': 4, 'MONEY': 5, 'PERCENT': 6, 'MISC': 7, 'O': 8}
+    nerType = {'PERSON': 0, 'LOCATION': 1, 'ORGANIZATION': 2, 'DATE': 3, 'TIME': 4, 'MONEY': 5, 'PERCENT': 6, 'MISC': 7}
     freq = [0] * len(nerType)
     for a in annotateList:
         if a in nerType:
