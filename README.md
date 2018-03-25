@@ -9,7 +9,9 @@ Implement: we tried two different approaches for the QA system
   * Project3_Shuo.ipynb [logistic regression] 
   * xyproject3.py [unigram model]
 
-HOW TO RUN xyproject3.py
+
+
+Details for xyproject3.py
 * function list
   * corenlp.CoreNLPClient(annotators='tokenize ssplit parse lemma pos ner'.split())
   * TfidfVectorizer() utilize tf-idf algorithm
